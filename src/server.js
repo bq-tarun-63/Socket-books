@@ -14,9 +14,25 @@ const server = http.createServer(app);
 const INTERNAL_SECRET = process.env.INTERNAL_SECRET || "dev-secret";
 
 // --- YJS WebSocket (for future collaborative editing) ---
-const wss = new WebSocket.Server({ server });
+// Use noServer:true so the raw ws server does NOT intercept all upgrade requests.
+// Without this, ws grabs socket.io's WebSocket upgrades too, causing "websocket error".
+// We manually forward only non-socket.io paths to Yjs here.
+const wss = new WebSocket.Server({ noServer: true });
 wss.on("connection", (ws, req) => {
   setupWSConnection(ws, req);
+});
+
+// Route WebSocket upgrade requests:
+//   /socket.io/* → handled by socket.io (do nothing here, it hooks its own listener)
+//   everything else → Yjs collaborative editing
+server.on("upgrade", (request, socket, head) => {
+  if (request.url && request.url.startsWith("/socket.io")) {
+    // socket.io manages its own upgrade — do not intercept
+    return;
+  }
+  wss.handleUpgrade(request, socket, head, (ws) => {
+    wss.emit("connection", ws, request);
+  });
 });
 
 // --- SOCKET.IO ---
@@ -43,7 +59,7 @@ io.on("connection", (socket) => {
       `\n  socketId : ${socket.id}`,
       `\n  userId   : ${userId || "N/A"}`,
       `\n  email    : ${email || "N/A"}`,
-    );
+    ); 
 
     if (!email) {
       console.warn(`[SocketServer] ⚠ join-room rejected — no email provided (socketId: ${socket.id})`);
